@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+lvenv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Documentation
+*.md
+*.pdf
+*.docx
+docs/
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Azure
+.azure/
+*.bicep
+
+# Test data
+test_data/
+sample_data/
+
+# Scripts (keep only app files)
+populate.py
+create_tables.sql
+deploy-to-azure.ps1
+
+# Large files
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.mov
+
