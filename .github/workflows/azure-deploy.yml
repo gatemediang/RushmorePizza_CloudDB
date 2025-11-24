@@ -1,0 +1,136 @@
+name: Deploy RushMore Pizza to Azure
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AZURE_RESOURCE_GROUP: rg-rushmorepizza-prod
+  AZURE_LOCATION: eastus
+  POSTGRES_ADMIN_USER: rushmoreadmin
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  provision-infrastructure:
+    runs-on: ubuntu-latest
+    outputs:
+      webAppName: ${{ steps.deploy.outputs.webAppName }}
+      postgresServer: ${{ steps.deploy.outputs.postgresServerFqdn }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Create Resource Group
+      run: |
+        az group create \
+          --name ${{ env.AZURE_RESOURCE_GROUP }} \
+          --location ${{ env.AZURE_LOCATION }}
+
+    - name: Deploy Bicep template
+      id: deploy
+      uses: azure/arm-deploy@v1
+      with:
+        resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
+        template: ./infrastructure/azure-resources.bicep
+        parameters: >
+          projectName=rushmorepizza
+          environment=prod
+          location=${{ env.AZURE_LOCATION }}
+          adminUsername=${{ env.POSTGRES_ADMIN_USER }}
+          adminPassword=${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+        deploymentName: rushmorepizza-${{ github.run_number }}
+
+    - name: Output deployment info
+      run: |
+        echo "PostgreSQL Server: ${{ steps.deploy.outputs.postgresServerFqdn }}"
+        echo "Web App URL: ${{ steps.deploy.outputs.webAppUrl }}"
+
+  deploy-database-schema:
+    needs: provision-infrastructure
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install PostgreSQL client
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
+
+    - name: Deploy database schema
+      env:
+        PGHOST: ${{ needs.provision-infrastructure.outputs.postgresServer }}
+        PGPORT: 5432
+        PGDATABASE: rushmore_db
+        PGUSER: ${{ env.POSTGRES_ADMIN_USER }}
+        PGPASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+        PGSSLMODE: require
+      run: |
+        psql -f create_tables.sql
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Populate database with Faker data
+      env:
+        DB_HOST: ${{ needs.provision-infrastructure.outputs.postgresServer }}
+        DB_PORT: 5432
+        DB_NAME: rushmore_db
+        DB_USER: ${{ env.POSTGRES_ADMIN_USER }}
+        DB_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+        SSL_MODE: require
+      run: |
+        python populate.py
+
+  deploy-application:
+    needs: [provision-infrastructure, deploy-database-schema]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Create startup script
+      run: |
+        cat > startup.sh << 'EOF'
+        #!/bin/bash
+        gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 120
+        EOF
+        chmod +x startup.sh
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Deploy to Azure Web App
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ needs.provision-infrastructure.outputs.webAppName }}
+        package: .
+        startup-command: 'gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000'
+
+    - name: Test deployment
+      run: |
+        sleep 30
+        WEBAPP_URL="${{ needs.provision-infrastructure.outputs.webAppUrl }}"
+        curl -f ${WEBAPP_URL}/health || exit 1

@@ -1,0 +1,9 @@
+# requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.23
+gunicorn>=21.2
+pydantic>=2
+psycopg2-binary>=2.9
+python-dotenv
+Faker
+requests

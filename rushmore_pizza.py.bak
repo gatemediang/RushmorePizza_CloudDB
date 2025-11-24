@@ -1,0 +1,299 @@
+from {module_with_get_stores} import get_stores
+import os
+import random
+import logging
+import json  # needed for save_order_to_json
+from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
+from services.menu_service import get_menu_items
+from services.order_service import place_order
+
+# Configuration / constants
+ORDERDB_FILE = os.getenv("ORDER_FILE", "pizza_orders.json")
+PIZZA_OF_DAY_OVERRIDE = os.getenv("PIZZA_OF_THE_DAY")  # e.g. "Pepperoni"
+BOX_PIZZA_OF_DAY_DISCOUNT = Decimal("0.25")
+BULK_BOX_THRESHOLD_LOW = 5
+BULK_BOX_THRESHOLD_HIGH = 10
+BULK_BOX_DISCOUNT_LOW = Decimal("0.10")
+BULK_BOX_DISCOUNT_HIGH = Decimal("0.20")
+SLICE_DISCOUNT_THRESHOLD = 8
+SLICE_DISCOUNT_RATE = Decimal("0.05")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+# Expanded Pizza Menu
+pizza_data = {
+    "1": {"name": "Classic", "price": Decimal("3.4")},
+    "2": {"name": "Chicken", "price": Decimal("4.5")},
+    "3": {"name": "Pepperoni", "price": Decimal("4.0")},
+    "4": {"name": "Deluxe", "price": Decimal("6.0")},
+    "5": {"name": "Vegetable", "price": Decimal("4.0")},
+    "6": {"name": "Chocolate", "price": Decimal("12.0")},
+    "7": {"name": "Cheese", "price": Decimal("5.0")},
+    "8": {"name": "Hawaiian", "price": Decimal("7.0")},
+    "9": {"name": "Greek", "price": Decimal("8.0")},
+}
+
+
+def _pick_pizza_of_the_day():
+    """
+    Picks a random menu item from the database as Pizza of the Day.
+    Returns dict like {"item_id", "name", ...} or None on failure.
+    """
+    try:
+        items = get_menu_items()  # reads from DB using .env
+        if not items:
+            return None
+        return random.choice(items)
+    except Exception:
+        return None
+
+
+# Compute Pizza of the Day once per app run (from DB, not a hardcoded list)
+_POTD = _pick_pizza_of_the_day()
+PIZZA_OF_THE_DAY_ID = _POTD["item_id"] if _POTD else None
+PIZZA_OF_THE_DAY_NAME = _POTD["name"] if _POTD else None
+
+
+def is_pizza_of_the_day_name(name: str) -> bool:
+    return bool(
+        PIZZA_OF_THE_DAY_NAME and name and name.lower() == PIZZA_OF_THE_DAY_NAME.lower()
+    )
+
+
+def _quantize_money(val: Decimal) -> Decimal:
+    return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def save_order_to_json(pizza_type, order_type, quantity, price: Decimal, discounts):
+    """
+    discounts: list of applied discount reason strings
+    """
+    order = {
+        "order_datetime": datetime.now().strftime("%Y-%m-%d-%H:%M:%S"),
+        "pizza_type": pizza_type,
+        "order_type": order_type,
+        "quantity": quantity,
+        "total_price": float(_quantize_money(price)),
+        "discount_applied": bool(discounts),
+        "discount_reasons": discounts,
+    }
+    data = []
+    if os.path.exists(ORDERDB_FILE):
+        try:
+            with open(ORDERDB_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if not isinstance(data, list):
+                    data = []
+        except (json.JSONDecodeError, OSError):
+            data = []
+    data.append(order)
+    # atomic write via temp file
+    tmp_path = ORDERDB_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+    os.replace(tmp_path, ORDERDB_FILE)
+
+
+def calculate_payment(
+    price: Decimal, quantity: int, discount_rate: Decimal = Decimal("0")
+) -> Decimal:
+    total = price * quantity
+    discount = total * discount_rate
+    return _quantize_money(total - discount)
+
+
+def handle_box_order(pizza_name, price: Decimal):
+    while True:
+        qty_input = input(
+            "How many Box(es) do you want? (or type 'q' to cancel): "
+        ).strip()
+        if qty_input.lower() == "q":
+            print("Box Order Cancelled")
+            return
+        if qty_input.isdigit():
+            quantity = int(qty_input)
+            break
+        print("Please enter a valid number.")
+
+    discount_rate = Decimal("0")
+    discount_reasons = []
+    if pizza_name == PIZZA_OF_THE_DAY_NAME:
+        discount_rate += BOX_PIZZA_OF_DAY_DISCOUNT
+        discount_reasons.append("Pizza of the Day 25%")
+    if BULK_BOX_THRESHOLD_LOW <= quantity < BULK_BOX_THRESHOLD_HIGH:
+        discount_rate += BULK_BOX_DISCOUNT_LOW
+        discount_reasons.append("Bulk 10%")
+    elif quantity >= BULK_BOX_THRESHOLD_HIGH:
+        discount_rate += BULK_BOX_DISCOUNT_HIGH
+        discount_reasons.append("Bulk 20%")
+
+    total = calculate_payment(price, quantity, discount_rate)
+    print(f"Your payment is ${total:.2f} for {quantity} of {pizza_name} Pizza box(es).")
+    if discount_reasons:
+        print("Discounts applied:", ", ".join(discount_reasons))
+    save_order_to_json(pizza_name, "Box", quantity, total, discount_reasons)
+
+
+def handle_slice_order(pizza_name, slice_price: Decimal):
+    while True:
+        qty_input = input(
+            "How many slices do you want? (or type 'q' to cancel): "
+        ).strip()
+        if qty_input.lower() == "q":
+            print("Slice Order Cancelled")
+            return
+        if qty_input.isdigit():
+            quantity = int(qty_input)
+            if quantity > 16:
+                print("Maximum of 16 slices per order. Please try again.")
+                continue
+            break
+        print("Please enter a valid number.")
+
+    discount_rate = (
+        SLICE_DISCOUNT_RATE if quantity >= SLICE_DISCOUNT_THRESHOLD else Decimal("0")
+    )
+    discount_reasons = ["Slice bulk 5%"] if discount_rate > 0 else []
+    total = calculate_payment(slice_price, quantity, discount_rate)
+    print(
+        f"Your payment is ${total:.2f} for {quantity} of {pizza_name} Pizza slice(s)."
+    )
+    if discount_reasons:
+        print("A 5% discount has been applied for ordering 8 or more slices.")
+    save_order_to_json(pizza_name, "Slice", quantity, total, discount_reasons)
+
+
+def load_menu_from_db():
+    return get_menu_items()
+
+
+def choose_store():
+    stores = get_stores()
+    print("Available stores:")
+    for s in stores:
+        print(f"{s['store_id']}: {s['city']}")
+    while True:
+        s_in = input("Select store_id: ").strip()
+        if s_in.isdigit() and any(s["store_id"] == int(s_in) for s in stores):
+            return int(s_in)
+        print("Invalid store_id, try again.")
+
+
+def save_order_to_db(store_id, cart, customer_id=None, payment="cash"):
+    """
+    cart: list like [{"item_id": 1, "order_type": "Slice", "quantity": 2}, ...]
+    """
+    try:
+        result = place_order(
+            customer_id=customer_id,
+            store_id=store_id,
+            items=cart,
+            payment_method=payment,
+        )
+        logging.info(
+            "Order persisted order_id=%s total=%.2f lines=%s",
+            result["order_id"],
+            result["total_amount"],
+            result["lines"],
+        )
+        print(
+            f"Order saved. ID={result['order_id']} Total=${result['total_amount']:.2f}"
+        )
+    except Exception as e:
+        logging.exception("Failed to save order: %s", e)
+        print("Failed to save order. Please try again.")
+
+
+def sort_menu(menu):
+    # Final guard: ascending by item_id
+    menu.sort(key=lambda m: m["item_id"])
+    return menu
+
+
+def pizza_selection_order(choice=None):
+    menu = sort_menu(load_menu_from_db())
+    id_map = {m["item_id"]: m for m in menu}
+
+    if choice is None:
+        print("Menu:")
+        for m in menu:
+            box = f"${m['box_price']:.2f}" if m["box_price"] > 0 else "N/A"
+            slc = f"${m['slice_price']:.2f}" if m["slice_price"] > 0 else "N/A"
+            print(f"{m['item_id']}: {m['name']} Box {box} / Slice {slc}")
+        while True:
+            raw = input("Enter item_id: ").strip()
+            if raw.isdigit():
+                cid = int(raw)
+                if cid in id_map:
+                    choice = cid
+                    break
+            print("Invalid item_id, try again.")
+    else:
+        if isinstance(choice, str) and choice.isdigit():
+            choice = int(choice)
+        if choice not in id_map:
+            print(f"Provided choice '{choice}' not found in menu.")
+            return
+
+    item = id_map[choice]
+
+    # Enforce only available order types based on prices
+    allowed = []
+    if item["box_price"] > 0:
+        allowed.append("Box")
+    if item["slice_price"] > 0:
+        allowed.append("Slice")
+    if not allowed:
+        print("This item is not available to order.")
+        return
+
+    prompt = f"Choose {' or '.join(allowed)}: "
+    order_type = input(prompt).strip().title()
+    while order_type not in allowed:
+        order_type = input(f"Enter one of {allowed}: ").strip().title()
+
+    qty_raw = input("Quantity: ").strip()
+    while not qty_raw.isdigit() or int(qty_raw) <= 0:
+        qty_raw = input("Enter positive integer quantity: ").strip()
+    quantity = int(qty_raw)
+
+    store_id = choose_store()
+    cart = [
+        {"item_id": item["item_id"], "order_type": order_type, "quantity": quantity}
+    ]
+    save_order_to_db(store_id=store_id, cart=cart, customer_id=None, payment="card")
+
+
+def main_system():
+    print("🍕 Welcome to RushMore Pizzeria 🍕")
+    if PIZZA_OF_THE_DAY_NAME:
+        print(
+            f"🌟 Pizza of the Day: {PIZZA_OF_THE_DAY_NAME} - 25% off on box orders! 🌟"
+        )
+    try:
+        menu = sort_menu(load_menu_from_db())
+        print("Take a look at our Menu:\n" + "-" * 40)
+        for m in menu:
+            box = f"${m['box_price']:.2f}" if m["box_price"] > 0 else "N/A"
+            slc = f"${m['slice_price']:.2f}" if m["slice_price"] > 0 else "N/A"
+            print(f"{m['item_id']}: {m['name']} Box {box} / Slice {slc}")
+        print("-" * 40)
+    except Exception:
+        for key, value in pizza_data.items():
+            print(f"{key}: {value['name']} - ${value['price']:.2f}")
+
+    while True:
+        choice = (
+            input("Pick your choice (item_id) or type 'q' to quit: ").strip().lower()
+        )
+        if choice == "q":
+            print("Goodbye and Have a nice day!\nCome back another time...")
+            break
+        pizza_selection_order(choice)
+
+
+if __name__ == "__main__":
+    main_system()
+quit
+
