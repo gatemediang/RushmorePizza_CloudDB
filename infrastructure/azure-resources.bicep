@@ -6,11 +6,12 @@ param adminUsername string = 'rushmoreadmin'
 param adminPassword string
 
 var uniqueSuffix = uniqueString(resourceGroup().id)
-var postgresServerName = '${projectName}-postgres-${uniqueSuffix}'
-var containerGroupName = '${projectName}-api-${uniqueSuffix}'
-var keyVaultName = '${projectName}-kv-${uniqueSuffix}'
+var shortSuffix = substring(uniqueSuffix, 0, 6)  // Shortened to 6 characters
+var postgresServerName = '${projectName}-pg-${shortSuffix}'
+var containerGroupName = '${projectName}-api-${shortSuffix}'
+var keyVaultName = 'kv-${projectName}-${shortSuffix}'  // Fixed: max 24 chars
 var appInsightsName = '${projectName}-ai-${environment}'
-var containerImageName = 'mcr.microsoft.com/azuredocs/aci-helloworld:latest'  // Temporary, will be updated in workflow
+var containerImageName = 'mcr.microsoft.com/azuredocs/aci-helloworld:latest'
 
 // PostgreSQL Flexible Server
 resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-03-01-preview' = {
@@ -114,7 +115,7 @@ resource dbConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01'
   }
 }
 
-// Azure Container Instances (Replaces App Service)
+// Azure Container Instances
 resource containerGroup 'Microsoft.ContainerInstance/containerGroups@2023-05-01' = {
   name: containerGroupName
   location: location
