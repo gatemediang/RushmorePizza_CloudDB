@@ -1,4 +1,3 @@
-// filepath: [azure-deploy.yml](http://_vscodecontentref_/0)
 name: Deploy RushMore Pizza to Azure
 
 on:
@@ -48,7 +47,7 @@ jobs:
       uses: azure/arm-deploy@v1
       with:
         resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
-        template: [azure-resources.bicep](http://_vscodecontentref_/1)
+        template: ./infrastructure/azure-resources.bicep
         parameters: >
           projectName=rushmorepizza
           environment=prod
@@ -117,7 +116,7 @@ jobs:
         SSL_MODE: require
       run: |
         echo "Populating database with Faker data..."
-        python [populate.py](http://_vscodecontentref_/2)
+        python populate.py
 
   build-and-deploy-container:
     needs: [provision-infrastructure, deploy-database-schema]
@@ -141,8 +140,8 @@ jobs:
         WORKDIR /app
 
         # Install dependencies
-        COPY [requirements.txt](http://_vscodecontentref_/3) .
-        RUN pip install --no-cache-dir -r [requirements.txt](http://_vscodecontentref_/4)
+        COPY requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
 
         # Copy application code
         COPY . .
@@ -196,7 +195,7 @@ jobs:
         done
         
         echo "::warning::Health check failed - container may need manual configuration"
-        exit 0  # Don't fail the workflow
+        exit 0
 
   notify-completion:
     needs: [provision-infrastructure, build-and-deploy-container]
