@@ -5,7 +5,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A cloud-native pizza ordering and management system built with FastAPI, PostgreSQL, and Azure cloud infrastructure. This project demonstrates modern software engineering practices including RESTful API design, cloud deployment, CI/CD automation, and database management.
+A cloud-native pizza ordering and enterprise data management system built with FastAPI, PostgreSQL, and Azure cloud infrastructure. This project demonstrates modern software engineering practices including RESTful API design, cloud deployment, CI/CD automation, and database management.
 
 ## 📋 Table of Contents
 
