@@ -7,10 +7,10 @@ param adminPassword string
 
 var uniqueSuffix = uniqueString(resourceGroup().id)
 var postgresServerName = '${projectName}-postgres-${uniqueSuffix}'
-var appServicePlanName = '${projectName}-asp-${environment}'
-var webAppName = '${projectName}-api-${uniqueSuffix}'
+var containerGroupName = '${projectName}-api-${uniqueSuffix}'
 var keyVaultName = '${projectName}-kv-${uniqueSuffix}'
 var appInsightsName = '${projectName}-ai-${environment}'
+var containerImageName = 'mcr.microsoft.com/azuredocs/aci-helloworld:latest'  // Temporary, will be updated in workflow
 
 // PostgreSQL Flexible Server
 resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-03-01-preview' = {
@@ -57,10 +57,10 @@ resource firewallRuleAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRu
   }
 }
 
-// Firewall rule to allow your IP (update this)
+// Firewall rule to allow all IPs (for demo purposes)
 resource firewallRuleClientIP 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-03-01-preview' = {
   parent: postgresServer
-  name: 'AllowClientIP'
+  name: 'AllowAllIPs'
   properties: {
     startIpAddress: '0.0.0.0'
     endIpAddress: '255.255.255.255'
@@ -97,72 +97,6 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// App Service Plan (Linux)
-resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
-  name: appServicePlanName
-  location: location
-  sku: {
-    name: 'F1'  // Changed from 'B1' to 'F1' (Free tier)
-    tier: 'Free'  // Changed from 'Basic' to 'Free'
-  }
-  kind: 'linux'
-  properties: {
-    reserved: true
-  }
-}
-
-// Web App (FastAPI)
-resource webApp 'Microsoft.Web/sites@2023-01-01' = {
-  name: webAppName
-  location: location
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {
-    serverFarmId: appServicePlan.id
-    httpsOnly: true
-    siteConfig: {
-      linuxFxVersion: 'PYTHON|3.11'
-      alwaysOn: true
-      ftpsState: 'Disabled'
-      appSettings: [
-        {
-          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-          value: appInsights.properties.ConnectionString
-        }
-        {
-          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
-          value: 'true'
-        }
-        {
-          name: 'DB_HOST'
-          value: '${postgresServerName}.postgres.database.azure.com'
-        }
-        {
-          name: 'DB_PORT'
-          value: '5432'
-        }
-        {
-          name: 'DB_NAME'
-          value: 'rushmore_db'
-        }
-        {
-          name: 'DB_USER'
-          value: adminUsername
-        }
-        {
-          name: 'DB_PASSWORD'
-          value: '@Microsoft.KeyVault(SecretUri=${keyVault.properties.vaultUri}secrets/db-password/)'
-        }
-        {
-          name: 'SSL_MODE'
-          value: 'require'
-        }
-      ]
-    }
-  }
-}
-
 // Store secrets in Key Vault
 resource dbPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: keyVault
@@ -180,27 +114,78 @@ resource dbConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01'
   }
 }
 
-// Grant Key Vault access to Web App
-resource keyVaultAccessPolicy 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = {
-  parent: keyVault
-  name: 'add'
+// Azure Container Instances (Replaces App Service)
+resource containerGroup 'Microsoft.ContainerInstance/containerGroups@2023-05-01' = {
+  name: containerGroupName
+  location: location
   properties: {
-    accessPolicies: [
+    containers: [
       {
-        tenantId: subscription().tenantId
-        objectId: webApp.identity.principalId
-        permissions: {
-          secrets: [
-            'get'
-            'list'
+        name: 'fastapi-app'
+        properties: {
+          image: containerImageName
+          resources: {
+            requests: {
+              cpu: 1
+              memoryInGB: json('1.5')
+            }
+          }
+          ports: [
+            {
+              port: 8000
+              protocol: 'TCP'
+            }
+          ]
+          environmentVariables: [
+            {
+              name: 'DB_HOST'
+              value: '${postgresServerName}.postgres.database.azure.com'
+            }
+            {
+              name: 'DB_PORT'
+              value: '5432'
+            }
+            {
+              name: 'DB_NAME'
+              value: 'rushmore_db'
+            }
+            {
+              name: 'DB_USER'
+              value: adminUsername
+            }
+            {
+              name: 'DB_PASSWORD'
+              secureValue: adminPassword
+            }
+            {
+              name: 'SSL_MODE'
+              value: 'require'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsights.properties.ConnectionString
+            }
           ]
         }
       }
     ]
+    osType: 'Linux'
+    restartPolicy: 'Always'
+    ipAddress: {
+      type: 'Public'
+      ports: [
+        {
+          port: 8000
+          protocol: 'TCP'
+        }
+      ]
+      dnsNameLabel: containerGroupName
+    }
   }
 }
 
 output postgresServerFqdn string = postgresServer.properties.fullyQualifiedDomainName
-output webAppUrl string = 'https://${webApp.properties.defaultHostName}'
+output containerUrl string = 'http://${containerGroup.properties.ipAddress.fqdn}:8000'
 output keyVaultName string = keyVault.name
-output webAppName string = webApp.name
+output containerGroupName string = containerGroup.name
+output containerFqdn string = containerGroup.properties.ipAddress.fqdn
