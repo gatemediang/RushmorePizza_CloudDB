@@ -3,10 +3,11 @@ name: Deploy RushMore Pizza to Azure
 on:
   push:
     branches: 
-      - feature/local-fastapi-docker-setup  # Deploy only from this branch
+      - main  # Deploy when code is pushed/merged to main
+      - feature/local-fastapi-docker-setup  # Keep feature branch for testing
   pull_request:
     branches:
-      - feature/local-fastapi-docker-setup
+      - main
   workflow_dispatch:  # Allow manual trigger
 
 env:
@@ -27,8 +28,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        ref: feature/local-fastapi-docker-setup  # Explicitly checkout this branch
 
     - name: Azure Login
       uses: azure/login@v1
@@ -71,8 +70,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        ref: feature/local-fastapi-docker-setup
 
     - name: Install PostgreSQL client
       run: |
@@ -128,8 +125,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        ref: feature/local-fastapi-docker-setup
 
     - name: Set up Python ${{ env.PYTHON_VERSION }}
       uses: actions/setup-python@v4
@@ -222,7 +217,8 @@ jobs:
       run: |
         echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Branch:** feature/local-fastapi-docker-setup" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
         echo "**API URL:** https://${{ needs.provision-infrastructure.outputs.webAppName }}.azurewebsites.net" >> $GITHUB_STEP_SUMMARY
         echo "**API Docs:** https://${{ needs.provision-infrastructure.outputs.webAppName }}.azurewebsites.net/docs" >> $GITHUB_STEP_SUMMARY
         echo "**PostgreSQL:** ${{ needs.provision-infrastructure.outputs.postgresServer }}" >> $GITHUB_STEP_SUMMARY
