@@ -102,8 +102,8 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name: appServicePlanName
   location: location
   sku: {
-    name: 'B1'
-    tier: 'Basic'
+    name: 'F1'  // Changed from 'B1' to 'F1' (Free tier)
+    tier: 'Free'  // Changed from 'Basic' to 'Free'
   }
   kind: 'linux'
   properties: {
