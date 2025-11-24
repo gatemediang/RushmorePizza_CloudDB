@@ -1,17 +1,47 @@
 param location string = resourceGroup().location
-param projectName string = 'rushmorepizza'
+param projectName string = 'rushmore'  // Shortened base name
 param environment string = 'prod'
 param adminUsername string = 'rushmoreadmin'
 @secure()
 param adminPassword string
+@description('Your IP address for PostgreSQL access (get from https://whatismyip.com)')
+param clientIpAddress string = ''
 
-var uniqueSuffix = uniqueString(resourceGroup().id)
-var shortSuffix = substring(uniqueSuffix, 0, 6)  // Shortened to 6 characters
-var postgresServerName = '${projectName}-pg-${shortSuffix}'
-var containerGroupName = '${projectName}-api-${shortSuffix}'
-var keyVaultName = 'kv-${projectName}-${shortSuffix}'  // Fixed: max 24 chars
+// Generate shorter unique suffix (8 chars max)
+var uniqueSuffix = substring(uniqueString(resourceGroup().id), 0, 8)
+var postgresServerName = '${projectName}-pg-${uniqueSuffix}'
+var containerGroupName = '${projectName}-aci-${uniqueSuffix}'
+var keyVaultName = 'kv-${projectName}${uniqueSuffix}'  // Total: ~19 chars
 var appInsightsName = '${projectName}-ai-${environment}'
-var containerImageName = 'mcr.microsoft.com/azuredocs/aci-helloworld:latest'
+var logAnalyticsName = '${projectName}-logs-${environment}'
+
+// Log Analytics Workspace (required for Application Insights)
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
+  name: logAnalyticsName
+  location: location
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: 30
+    features: {
+      enableLogAccessUsingOnlyResourcePermissions: true
+    }
+  }
+}
+
+// Application Insights (linked to Log Analytics)
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: appInsightsName
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+  }
+}
 
 // PostgreSQL Flexible Server
 resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-03-01-preview' = {
@@ -27,6 +57,7 @@ resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-03-01-pr
     version: '16'
     storage: {
       storageSizeGB: 32
+      autoGrow: 'Enabled'
     }
     backup: {
       backupRetentionDays: 7
@@ -34,6 +65,9 @@ resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-03-01-pr
     }
     highAvailability: {
       mode: 'Disabled'
+    }
+    network: {
+      // Empty - allows public access with firewall rules
     }
   }
 }
@@ -48,7 +82,7 @@ resource postgresDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2
   }
 }
 
-// Firewall rule to allow Azure services
+// Firewall rule: Allow Azure services (for Container Instances)
 resource firewallRuleAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-03-01-preview' = {
   parent: postgresServer
   name: 'AllowAzureServices'
@@ -58,13 +92,13 @@ resource firewallRuleAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRu
   }
 }
 
-// Firewall rule to allow all IPs (for demo purposes)
-resource firewallRuleClientIP 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-03-01-preview' = {
+// Firewall rule: Allow specific client IP (conditional, for development only)
+resource firewallRuleClientIP 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-03-01-preview' = if (!empty(clientIpAddress)) {
   parent: postgresServer
-  name: 'AllowAllIPs'
+  name: 'AllowClientIP'
   properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '255.255.255.255'
+    startIpAddress: clientIpAddress
+    endIpAddress: clientIpAddress
   }
 }
 
@@ -78,23 +112,14 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
       name: 'standard'
     }
     tenantId: subscription().tenantId
-    enabledForDeployment: true
+    enabledForDeployment: false
     enabledForTemplateDeployment: true
     enabledForDiskEncryption: false
-    enableRbacAuthorization: true
+    enableRbacAuthorization: false  // Changed to use access policies
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 7
     publicNetworkAccess: 'Enabled'
-  }
-}
-
-// Application Insights
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: appInsightsName
-  location: location
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    publicNetworkAccessForIngestion: 'Enabled'
-    publicNetworkAccessForQuery: 'Enabled'
+    accessPolicies: []  // Will be added via separate resource
   }
 }
 
@@ -111,7 +136,33 @@ resource dbConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01'
   parent: keyVault
   name: 'db-connection-string'
   properties: {
-    value: 'postgresql://${adminUsername}:${adminPassword}@${postgresServerName}.postgres.database.azure.com:5432/rushmore_db?sslmode=require'
+    value: 'postgresql://${adminUsername}:${adminPassword}@${postgresServer.properties.fullyQualifiedDomainName}:5432/rushmore_db?sslmode=require'
+  }
+}
+
+// Azure Container Instances with User-Assigned Managed Identity
+resource containerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${containerGroupName}-identity'
+  location: location
+}
+
+// Grant Container Identity access to Key Vault secrets
+resource keyVaultAccessPolicy 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = {
+  parent: keyVault
+  name: 'add'
+  properties: {
+    accessPolicies: [
+      {
+        tenantId: subscription().tenantId
+        objectId: containerIdentity.properties.principalId
+        permissions: {
+          secrets: [
+            'get'
+            'list'
+          ]
+        }
+      }
+    ]
   }
 }
 
@@ -119,12 +170,18 @@ resource dbConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01'
 resource containerGroup 'Microsoft.ContainerInstance/containerGroups@2023-05-01' = {
   name: containerGroupName
   location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${containerIdentity.id}': {}
+    }
+  }
   properties: {
     containers: [
       {
         name: 'fastapi-app'
         properties: {
-          image: containerImageName
+          image: 'mcr.microsoft.com/azuredocs/aci-helloworld:latest'  // Placeholder
           resources: {
             requests: {
               cpu: 1
@@ -140,7 +197,7 @@ resource containerGroup 'Microsoft.ContainerInstance/containerGroups@2023-05-01'
           environmentVariables: [
             {
               name: 'DB_HOST'
-              value: '${postgresServerName}.postgres.database.azure.com'
+              value: postgresServer.properties.fullyQualifiedDomainName
             }
             {
               name: 'DB_PORT'
@@ -166,6 +223,10 @@ resource containerGroup 'Microsoft.ContainerInstance/containerGroups@2023-05-01'
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: appInsights.properties.ConnectionString
             }
+            {
+              name: 'KEY_VAULT_NAME'
+              value: keyVault.name
+            }
           ]
         }
       }
@@ -182,11 +243,24 @@ resource containerGroup 'Microsoft.ContainerInstance/containerGroups@2023-05-01'
       ]
       dnsNameLabel: containerGroupName
     }
+    diagnostics: {
+      logAnalytics: {
+        workspaceId: logAnalytics.properties.customerId
+        workspaceKey: logAnalytics.listKeys().primarySharedKey
+      }
+    }
   }
+  dependsOn: [
+    keyVaultAccessPolicy
+  ]
 }
 
+// Outputs
 output postgresServerFqdn string = postgresServer.properties.fullyQualifiedDomainName
 output containerUrl string = 'http://${containerGroup.properties.ipAddress.fqdn}:8000'
+output containerApiDocs string = 'http://${containerGroup.properties.ipAddress.fqdn}:8000/docs'
 output keyVaultName string = keyVault.name
 output containerGroupName string = containerGroup.name
 output containerFqdn string = containerGroup.properties.ipAddress.fqdn
+output appInsightsInstrumentationKey string = appInsights.properties.InstrumentationKey
+output logAnalyticsWorkspaceId string = logAnalytics.id
