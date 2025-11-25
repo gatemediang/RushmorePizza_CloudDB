@@ -41,20 +41,38 @@ SELECT ROUND(AVG(total_amount),2) AS avg_order_value
 FROM orders;
 
 -- 5. Busiest hours of the day (by order count)
-SELECT EXTRACT(HOUR FROM order_timestamp) AS hour_of_day,
+SELECT EXTRACT(HOUR FROM order_date) AS hour_of_day,
        COUNT(*) AS orders_count
 FROM orders
 GROUP BY hour_of_day
 ORDER BY orders_count DESC;
 
--- Optional: busiest hour per store
--- WITH hourly AS (
---   SELECT store_id, EXTRACT(HOUR FROM order_timestamp) AS hr, COUNT(*) AS cnt
---   FROM orders
---   GROUP BY store_id, hr
--- )
--- SELECT h.store_id, s.city, hr AS hour_of_day, cnt,
---        RANK() OVER (PARTITION BY h.store_id ORDER BY cnt DESC) AS rnk
--- FROM hourly h JOIN stores s ON h.store_id = s.store_id
--- WHERE RANK() OVER (PARTITION BY h.store_id ORDER BY cnt DESC) = 1
--- ORDER BY cnt DESC;
+
+
+-- 6. Busiest hour per store
+WITH hourly AS (
+  SELECT 
+    store_id, 
+    EXTRACT(HOUR FROM order_date) AS hr, 
+    COUNT(*) AS cnt
+  FROM orders
+  GROUP BY store_id, hr
+),
+ranked AS (
+  SELECT 
+    h.store_id, 
+    s.city, 
+    h.hr AS hour_of_day, 
+    h.cnt AS orders_count,
+    RANK() OVER (PARTITION BY h.store_id ORDER BY h.cnt DESC) AS rnk
+  FROM hourly h 
+  JOIN stores s ON h.store_id = s.store_id
+)
+SELECT 
+  store_id, 
+  city, 
+  hour_of_day, 
+  orders_count
+FROM ranked
+WHERE rnk = 1
+ORDER BY orders_count DESC;

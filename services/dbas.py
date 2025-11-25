@@ -12,12 +12,9 @@ def connect():
     db = os.getenv("DB_NAME", "rushmore_db")
     user = os.getenv("DB_USER", "postgres")
     pwd = os.getenv("DB_PASSWORD", "")
-    ssl = os.getenv("SSL_MODE", "require")  # Changed to 'require' for Azure
-
+    ssl = os.getenv("SSL_MODE", "disable")
     if not pwd:
         raise MissingPasswordError("DB_PASSWORD environment variable is empty.")
-
-    # For Azure PostgreSQL, explicitly set host and port to avoid Unix socket
     return psycopg2.connect(
         host=host, port=port, dbname=db, user=user, password=pwd, sslmode=ssl
     )
