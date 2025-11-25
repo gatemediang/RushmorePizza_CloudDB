@@ -41,9 +41,14 @@ def safe_varchar(val: str, max_len: int) -> str:
     return (val or "")[:max_len]
 
 
-def unique_phone():
-    # Fixed-length <= 20 (12 chars like 555-123-4567)
-    return fake.unique.bothify("###-###-####")
+def unique_phone(existing: set):
+    """Generate a unique phone number not in the existing set."""
+    for _ in range(1000):  # Try up to 1000 times
+        phone = fake.bothify("###-###-####")
+        if phone not in existing:
+            existing.add(phone)
+            return phone
+    raise RuntimeError("Could not generate enough unique phone numbers.")
 
 
 def connect():
@@ -73,22 +78,26 @@ def main():
     cur = conn.cursor()
     try:
         if RESET_DB:
+            print("Resetting database...")
             cur.execute(
                 """
                 TRUNCATE order_items, orders, menu_item_ingredients,
                          menu_items, ingredients, customers, stores
                 RESTART IDENTITY CASCADE;
-            """
+                """
             )
             conn.commit()
+            print("✓ Database reset complete")
 
         # 1) Stores
+        print(f"Populating {NUM_STORES} stores...")
         fake.unique.clear()
+        phone_numbers = set()
         stores = [
             (
-                fake.street_address(),
-                fake.city(),
-                safe_varchar(unique_phone(), 20),
+                safe_varchar(fake.street_address(), 255),
+                safe_varchar(fake.city(), 100),
+                unique_phone(phone_numbers),
                 fake.date_time_this_year(tzinfo=datetime.timezone.utc),
             )
             for _ in range(NUM_STORES)
@@ -98,6 +107,7 @@ def main():
             "INSERT INTO stores (address, city, phone_number, opened_at) VALUES %s",
             stores,
         )
+        print(f"✓ {NUM_STORES} stores inserted")
 
         # 2) Ingredients (example placeholder)
         fake.unique.clear()
