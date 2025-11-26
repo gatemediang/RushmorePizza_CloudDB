@@ -805,7 +805,7 @@ Contributions are welcome! Please follow these steps:
 
 ## 📄 License
 
-This project is part of the **10Alytics Data Engineering Bootcamp** final capstone project.
+MIT
 
 © 2025 RushMore Pizzeria. All rights reserved.
 
@@ -823,17 +823,13 @@ This project is part of the **10Alytics Data Engineering Bootcamp** final capsto
 - 🔌 API Docs: [Swagger UI](http://rushmorepizza-aci-kb55ghrh.uksouth.azurecontainer.io:8000/docs)
 - 📁 Repository: [GitHub](https://github.com/yourusername/RushmorePizza_CloudDB)
 
-**Bootcamp:**
-- 🎓 [10Alytics](https://www.10alytics.io/)
-- 📚 Data Engineering Track
-- 📅 November 2025 Cohort
+
 
 ---
 
 ## 🎓 Acknowledgments
 
 Special thanks to:
-- **10Alytics Team** - For comprehensive training and mentorship
 - **Microsoft Azure** - For cloud infrastructure
 - **FastAPI Community** - For excellent documentation
 - **Power BI Community** - For visualization inspiration
